@@ -4,10 +4,11 @@ import hashlib
 import matplotlib.pyplot as plt
 
 # Параметры для демонстрации (упрощённые и небезопасные)
-q = 2**7  # Модуль для арифметики в кольце Z_q
-p = 2**3  # Новая точность после округления (результат в Z_p)
-n = 2**4   # Степень полинома (число коэффициентов)
+q = 2**8  # Модуль для арифметики в кольце Z_q
+p = 2**4  # Новая точность после округления (результат в Z_p)
+n = 2**2   # Степень полинома (число коэффициентов)
 d = q // p  # Фактор деления для округления (d = 16)
+#res = []
 
 
 ##########################
@@ -30,14 +31,14 @@ def poly_mul(a, b, mod):
 # Кастомизированные функции округления и hint
 ##########################
 
-def poly_round_custom(poly, d, offset):
+def poly_round(poly, d, offset):
     """
     Округление: вычисляем floor((x+offset)/d) для каждого коэффициента.
     Обычно offset выбирают равным d//2.
     """
     return [int((x + offset) / d) % p for x in poly]
 
-def compute_hint_custom(poly_raw, d, threshold):
+def compute_hint(poly_raw, d, threshold):
     """
     Вычисление hint: для каждого коэффициента, если остаток от деления на d больше или равен threshold, возвращаем 1, иначе 0.
     """
@@ -90,7 +91,7 @@ def reconcile(value, hint):
 # КЕМ: keygen, encapsulate, decapsulate с параметрами округления
 ##########################
 
-def keygen_custom(offset):
+def keygen(offset):
     """
     Генерация ключей с использованием кастомизированного округления.
     offset – смещение для функции округления.
@@ -98,12 +99,12 @@ def keygen_custom(offset):
     a = generate_uniform_poly(q)
     s = sample_secret()
     as_product = poly_mul(a, s, q)
-    b = poly_round_custom(as_product, d, offset)
+    b = poly_round(as_product, d, offset)
     pk = (a, b)
     sk = s
     return pk, sk
 
-def encapsulate_custom(pk, offset, threshold):
+def encapsulate(pk, offset, threshold):
     """
     Инкапсуляция с параметрами:
       offset – смещение для округления,
@@ -114,29 +115,29 @@ def encapsulate_custom(pk, offset, threshold):
     m_enc = encode_message(m)
     s_prime = sample_secret()
     u_product = poly_mul(a, s_prime, q)
-    u = poly_round_custom(u_product, d, offset)
+    u = poly_round(u_product, d, offset)
     b_product = poly_mul(b, s_prime, q)
-    hint = compute_hint_custom(b_product, d, threshold)
-    v_round = poly_round_custom(b_product, d, offset)
+    hint = compute_hint(b_product, d, threshold)
+    v_round = poly_round(b_product, d, offset)
     v = [(v_round[i] + m_enc[i]) % p for i in range(n)]
     ciphertext = (u, v, hint)
     shared_key = hash_shared(serialize_poly(m))
     return ciphertext, shared_key
 
-def decapsulate_custom(ciphertext, sk, offset):
+def decapsulate(ciphertext, sk, offset):
     """
     Декапсуляция с использованием заданного offset для округления.
     """
     u, v, hint = ciphertext
     us_product = poly_mul(u, sk, q)
-    w = poly_round_custom(us_product, d, offset)
+    w = poly_round(us_product, d, offset)
     w_adjusted = [reconcile(w[i], hint[i]) for i in range(n)]
     m_enc_recovered = [(v[i] - w_adjusted[i]) % p for i in range(n)]
     m_recovered = decode_message(m_enc_recovered)
     shared_key = hash_shared(serialize_poly(m_recovered))
     return shared_key
 
-def test_kem_custom(trials, offset, threshold):
+def test_kem(trials, offset, threshold):
     """
     Функция тестирования КЕМ:
       trials – количество итераций,
@@ -146,15 +147,49 @@ def test_kem_custom(trials, offset, threshold):
     """
     success = 0
     for i in range(trials):
-        pk, sk = keygen_custom(offset)
-        ciphertext, shared_key_enc = encapsulate_custom(pk, offset, threshold)
-        shared_key_dec = decapsulate_custom(ciphertext, sk, offset)
+        pk, sk = keygen(offset)
+        ciphertext, shared_key_enc = encapsulate(pk, offset, threshold)
+        shared_key_dec = decapsulate(ciphertext, sk, offset)
         if shared_key_enc == shared_key_dec:
             success += 1
-    print(success / trials)
+    #print(threshold, success / trials)
+    res.append([threshold, success / trials])
 
 ##########################
 # Эксперимент и построение графика
 ##########################
+res = []
+for threshold in range(1, 65):
+    test_kem(1000, d // 2, threshold)
+"""n = 16
+for q1 in [64, 128, 256, 512, 1024, 2048, 4096]:
+    for p1 in [16, 32, 64, 128, 256, 512, 1024, 2048]:
+            p = p1
+            q = q1
+            d = q // p + 1
+            if d != 1:
+                try:
+                    test_kem(1000, d / 2, 17)
+                except:
+                    pass
+"""
+"""res = sorted(res, key=lambda x: x[-1])
+for i in res:
+    print(*i)"""
 
-test_kem_custom(1000, d // 2, 17)
+thresholds = [item[0] for item in res]
+rates = [item[1] for item in res]
+
+for i in res:
+    print(*i)
+
+plt.figure(figsize=(8, 6))
+plt.plot(thresholds, rates, marker='o', linestyle='-', color='b', label='Rate vs Threshold')
+
+plt.title('Зависимость Rate от Threshold')
+plt.xlabel('Threshold')
+plt.ylabel('Rate')
+plt.grid(True)
+plt.legend()
+
+plt.show()

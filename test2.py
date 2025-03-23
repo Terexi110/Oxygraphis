@@ -1,5 +1,6 @@
 import random
 import hashlib
+import time
 
 # Параметры для демонстрации (упрощённые и небезопасные)
 #q = 2**8  # Модуль для арифметики в кольце Z_q
@@ -86,50 +87,37 @@ def reconcile(value, hint):
     return value
 
 def keygen(offset):
-    """
-    Генерация ключей: публичный и секретный ключи.
-    offset – смещение для функции округления.
-    """
-    a = generate_uniform_poly(q)  # Публичный полином
-    s = sample_secret()  # Секретный полином
+    a = generate_uniform_poly(q)
+    s = sample_secret()  # Секретный ключ для отправителя
     as_product = poly_mul(a, s, q)
-    b = poly_round(as_product, d, offset)  # Публичный ключ b(x)
+    b = poly_round(as_product, d, offset)
     pk = (a, b)  # Публичный ключ
-    sk = s  # Секретный ключ, который не передается
-    return pk, sk
+    # Секретный ключ не передается!
+    return pk, s  # Возвращаем только публичный ключ
 
 def encapsulate(pk, offset, threshold):
-    """
-    Инкапсуляция: генерируем эфемерный секрет и вычисляем шифротекст.
-    pk – публичный ключ,
-    offset – смещение для округления,
-    threshold – порог для подсказки (hint).
-    """
     a, b = pk
-    m = [random.choice([0, 1]) for _ in range(n)]  # Сообщение
-    m_enc = encode_message(m)  # Кодирование сообщения
-    s_prime = sample_secret()  # Эфемерный секрет для инкапсуляции
-    u_product = poly_mul(a, s_prime, q)  # Умножение полиномов
+    m = [random.choice([0, 1]) for _ in range(n)]
+    m_enc = encode_message(m)
+    s_prime = sample_secret()  # Эфемерный секрет для сессии
+    u_product = poly_mul(a, s_prime, q)
     u = poly_round(u_product, d, offset)
-    b_product = poly_mul(b, s_prime, q)  # Вычисление b'(x)
-    hint = compute_hint(b_product, d, threshold)  # Вычисление подсказки
+    b_product = poly_mul(b, s_prime, q)
+    hint = compute_hint(b_product, d, threshold)
     v_round = poly_round(b_product, d, offset)
-    v = [(v_round[i] + m_enc[i]) % p for i in range(n)]  # Шифротекст
-    ciphertext = (u, v, hint)  # Шифротекст
-    shared_key = hash_shared(serialize_poly(m))  # Общий ключ
+    v = [(v_round[i] + m_enc[i]) % p for i in range(n)]
+    ciphertext = (u, v, hint)
+    shared_key = hash_shared(serialize_poly(m))  # Общий ключ для проверки
     return ciphertext, shared_key
 
 def decapsulate(ciphertext, sk, offset):
-    """
-    Декапсуляция: восстановление общего ключа с использованием только публичного ключа.
-    """
     u, v, hint = ciphertext
-    us_product = poly_mul(u, sk, q)  # Умножение полиномов с использованием секретного ключа
-    w = poly_round(us_product, d, offset)  # Округление
-    w_adjusted = [reconcile(w[i], hint[i]) for i in range(n)]  # Корректировка
-    m_enc_recovered = [(v[i] - w_adjusted[i]) % p for i in range(n)]  # Восстановление сообщения
-    m_recovered = decode_message(m_enc_recovered)  # Декодирование сообщения
-    shared_key = hash_shared(serialize_poly(m_recovered))  # Генерация общего ключа
+    us_product = poly_mul(u, sk, q)
+    w = poly_round(us_product, d, offset)
+    w_adjusted = [reconcile(w[i], hint[i]) for i in range(n)]
+    m_enc_recovered = [(v[i] - w_adjusted[i]) % p for i in range(n)]
+    m_recovered = decode_message(m_enc_recovered)
+    shared_key = hash_shared(serialize_poly(m_recovered))
     return shared_key
 
 def test_kem(trials, offset, threshold):
@@ -147,6 +135,17 @@ def test_kem(trials, offset, threshold):
     return success / trials
 
 # Тестирование
+"""q = 2**8  # Модуль для арифметики в кольце Z_q
+p = 2**4  # Новая точность после округления (результат в Z_p)
+n = 2**2   # Степень полинома (число коэффициентов)
+d = q // p
+trials = 1
+threshold = 15
+offset = d // 2
+print(test_kem(trials, offset, threshold))"""
+
+
+start_time = time.time()
 trials = 10000
 q = 2**12
 p = 32
@@ -155,8 +154,26 @@ threshold = 126
 d = q // p
 offset = d // 2
 print(test_kem(trials, offset, threshold))
+print(time.time() - start_time)
 
+
+"""res = []
+
+for q in [2 ** 14, 2 ** 15]:
+    for p in [32, 64, 128, 256, 512]:
+        for n in [8, 16, 32, 64, 128]:
+            for threshold in range(32, 129):
+                d = q // p
+                if threshold < d:
+                    offset = d // 2
+                    res.append([p, n, threshold, test_kem(trials, offset, threshold)])
+
+res.sort(key=lambda x: x[3])
+for i in res:
+    print(*i)"""
 
 # 2**12
+#256 8 26 0.21
+#64 8 64 0.49
 #32 8 128 0.73
 #32 8 126 0.72

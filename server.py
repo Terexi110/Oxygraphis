@@ -1,13 +1,17 @@
+import atexit
+import socket
+import hashlib
 import random
-from gostcrypto import gosthash
+import struct
+import sys
 
-# Параметры для демонстрации (упрощённые и небезопасные)
-#q = 2**8  # Модуль для арифметики в кольце Z_q
-#p = 2**4  # Новая точность после округления (результат в Z_p)
-#n = 2**2   # Степень полинома (число коэффициентов)
-#d = q // p  # Фактор деления для округления (d = 16)
-#res = []
-
+# Параметры
+q = 2**12
+p = 32
+n = 8
+threshold = 126
+d = q // p
+offset = d // 2
 
 ##########################
 # ФУНКЦИИ ДЛЯ ПОЛИНОМОВ
@@ -55,19 +59,17 @@ def decode_message(poly):
     return [1 if coeff >= (p // 2) else 0 for coeff in poly]
 
 def serialize_poly(poly):
-    """Сериализация полинома (каждый коэффициент – 1 байт)"""
-    return bytes(poly)
+    """Сериализация списка целых чисел в байты (2 байта на коэффициент)."""
+    return b''.join(struct.pack('!H', coeff % (2**16)) for coeff in poly)
+
+# Новая функция десериализации
+def deserialize_poly(data, n):
+    """Десериализация байтов в список целых чисел."""
+    return list(struct.unpack('!{}H'.format(n), data))
 
 def hash_shared(data):
-    """
-    Хэширование по алгоритму Кузнечик (256-битная версия)
-    Поддерживает как байты, так и списки коэффициентов
-    """
-    if isinstance(data, list):
-        data = serialize_poly(data)
-    elif not isinstance(data, bytes):
-        data = bytes(data)
-    return gosthash.new('streebog256', data=data).digest()
+    """Хэширование (SHA-256) для получения общего ключа"""
+    return hashlib.sha256(data).digest()
 
 ##########################
 # Функции для сэмплирования и генерации полиномов
@@ -124,40 +126,78 @@ def decapsulate(ciphertext, sk, offset):
     m_enc_recovered = [(v[i] - w_adjusted[i]) % p for i in range(n)]
     m_recovered = decode_message(m_enc_recovered)
     shared_key = hash_shared(serialize_poly(m_recovered))
+
+    print("[Server] Decapsulated m_recovered:", m_recovered)
     return shared_key
 
-def test_kem(trials, offset, threshold):
-    """
-    Функция тестирования КЕМ.
-    Возвращает долю успешных итераций.
-    """
-    success = 0
-    for i in range(trials):
-        pk, sk = keygen(offset)
-        ciphertext, shared_key_enc = encapsulate(pk, offset, threshold)
-        shared_key_dec = decapsulate(ciphertext, sk, offset)
-        if shared_key_enc == shared_key_dec:
-            success += 1
-    return success / trials
+def cleanup():
+    """Функция для корректного закрытия ресурсов"""
+    global server_socket
+    if 'server_socket' in globals() and server_socket:
+        print("\nClosing server socket...")
+        try:
+            server_socket.shutdown(socket.SHUT_RDWR)
+            server_socket.close()
+            print("Server socket closed successfully")
+        except Exception as e:
+            print(f"Error closing socket: {e}")
 
-# Тестирование
+def socketOx():
+    global server_socket
+    HOST = '127.0.0.1'
+    PORT = 65433
 
-
-import time
-ts = time.time()
-trials = 1000
-q = 2**12
-p = 32
-n = 8
-threshold = 126
-d = q // p
-offset = d // 2
-print(test_kem(trials, offset, threshold))
-print(time.time() - ts)
+    main(HOST, PORT)
 
 
-# 2**12
-#256 8 26 0.21
-#64 8 64 0.49
-#32 8 128 0.73
-#32 8 126 0.72
+def main(HOST, PORT):
+    def recv_exact(length):  # Функция теперь внутри main()
+        data = b''
+        while len(data) < length:
+            packet = conn.recv(length - len(data))
+            if not packet:
+                break
+            data += packet
+        return data
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((HOST, PORT))
+        s.listen()
+        print("Server is listening...")
+        conn, addr = s.accept()
+        with conn:
+            print(f"Connected by {addr}")
+
+            # Генерация ключей
+            pk, sk = keygen(offset)
+            a, b = pk
+
+            # Сериализация публичного ключа
+            a_bytes = serialize_poly(a)
+            b_bytes = serialize_poly(b)
+
+            # Отправка с указанием длины
+            conn.sendall(len(a_bytes).to_bytes(4, 'big') + a_bytes)
+            conn.sendall(len(b_bytes).to_bytes(4, 'big') + b_bytes)
+
+            # Прием ciphertext
+            u_len = int.from_bytes(recv_exact(4), 'big')
+            u = deserialize_poly(recv_exact(u_len), n)  # Исправлено
+
+            v_len = int.from_bytes(recv_exact(4), 'big')
+            v = deserialize_poly(recv_exact(v_len), n)  # Исправлено
+
+            hint_len = int.from_bytes(recv_exact(4), 'big')
+            hint = list(recv_exact(hint_len))  # hint уже список 0/1
+
+            ciphertext = (u, v, hint)
+            shared_key = decapsulate(ciphertext, sk, offset)
+
+            # Проверка и отправка хэша
+            confirmation = hashlib.sha256(shared_key).digest()
+            conn.sendall(confirmation)
+            print("Shared key:", shared_key.hex())
+
+
+if __name__ == "__main__":
+    socketOx()

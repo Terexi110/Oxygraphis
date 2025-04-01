@@ -1,13 +1,15 @@
-import random
+import socket
 from gostcrypto import gosthash
+import random
+import struct
 
-# Параметры для демонстрации (упрощённые и небезопасные)
-#q = 2**8  # Модуль для арифметики в кольце Z_q
-#p = 2**4  # Новая точность после округления (результат в Z_p)
-#n = 2**2   # Степень полинома (число коэффициентов)
-#d = q // p  # Фактор деления для округления (d = 16)
-#res = []
-
+# Параметры
+q = 2**12
+p = 32
+n = 8
+threshold = 126
+d = q // p
+offset = d // 2
 
 ##########################
 # ФУНКЦИИ ДЛЯ ПОЛИНОМОВ
@@ -55,8 +57,10 @@ def decode_message(poly):
     return [1 if coeff >= (p // 2) else 0 for coeff in poly]
 
 def serialize_poly(poly):
-    """Сериализация полинома (каждый коэффициент – 1 байт)"""
-    return bytes(poly)
+    return b''.join(struct.pack('!H', coeff % (2**16)) for coeff in poly)
+
+def deserialize_poly(data, n):
+    return list(struct.unpack('!{}H'.format(n), data))
 
 def hash_shared(data):
     """
@@ -114,6 +118,8 @@ def encapsulate(pk, offset, threshold):
     v = [(v_round[i] + m_enc[i]) % p for i in range(n)]
     ciphertext = (u, v, hint)
     shared_key = hash_shared(serialize_poly(m))  # Общий ключ для проверки
+
+    print("[Client] Original m:", m)
     return ciphertext, shared_key
 
 def decapsulate(ciphertext, sk, offset):
@@ -126,38 +132,48 @@ def decapsulate(ciphertext, sk, offset):
     shared_key = hash_shared(serialize_poly(m_recovered))
     return shared_key
 
-def test_kem(trials, offset, threshold):
-    """
-    Функция тестирования КЕМ.
-    Возвращает долю успешных итераций.
-    """
-    success = 0
-    for i in range(trials):
-        pk, sk = keygen(offset)
-        ciphertext, shared_key_enc = encapsulate(pk, offset, threshold)
-        shared_key_dec = decapsulate(ciphertext, sk, offset)
-        if shared_key_enc == shared_key_dec:
-            success += 1
-    return success / trials
 
-# Тестирование
+def main():
+    HOST = '127.0.0.1'
+    PORT = 65433
 
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((HOST, PORT))
 
-import time
-ts = time.time()
-trials = 1000
-q = 2**12
-p = 32
-n = 8
-threshold = 126
-d = q // p
-offset = d // 2
-print(test_kem(trials, offset, threshold))
-print(time.time() - ts)
+        def recv_exact(length):
+            data = b''
+            while len(data) < length:
+                packet = s.recv(length - len(data))
+                if not packet:
+                    break
+                data += packet
+            return data
 
+        # Прием публичного ключа в правильном порядке
+        a_len = int.from_bytes(recv_exact(4), 'big')  # Сначала длина a
+        a_data = recv_exact(a_len)
+        a = deserialize_poly(a_data, n)
 
-# 2**12
-#256 8 26 0.21
-#64 8 64 0.49
-#32 8 128 0.73
-#32 8 126 0.72
+        b_len = int.from_bytes(recv_exact(4), 'big')  # Затем длина b
+        b_data = recv_exact(b_len)
+        b = deserialize_poly(b_data, n)
+
+        pk = (a, b)
+        
+        # Генерация и отправка ciphertext
+        ciphertext, shared_key = encapsulate(pk, offset, threshold)
+        u, v, hint = ciphertext
+
+        s.sendall(len(serialize_poly(u)).to_bytes(4, 'big') + serialize_poly(u))
+        s.sendall(len(serialize_poly(v)).to_bytes(4, 'big') + serialize_poly(v))
+        s.sendall(len(bytes(hint)).to_bytes(4, 'big') + bytes(hint))
+
+        # Проверка хэша
+        server_hash = recv_exact(32)
+        client_hash =gosthash.new('streebog256', data=shared_key).digest()
+
+        print("Shared key:", shared_key.hex())
+        print("Keys match!" if server_hash == client_hash else "Keys mismatch!")
+
+if __name__ == "__main__":
+    main()

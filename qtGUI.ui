@@ -101,7 +101,7 @@
      </font>
     </property>
    </widget>
-   <widget class="QTextEdit" name="server_text">
+   <widget class="QTextEdit" name="message_display">
     <property name="geometry">
      <rect>
       <x>20</x>
@@ -149,7 +149,7 @@
      <string>Отправить</string>
     </property>
    </widget>
-   <widget class="QTextEdit" name="textEdit">
+   <widget class="QTextEdit" name="message_input">
     <property name="geometry">
      <rect>
       <x>20</x>

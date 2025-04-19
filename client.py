@@ -201,6 +201,8 @@ def main():
         server_hash = recv_exact(32)
         client_hash = gosthash.new('streebog256', data=shared_key).digest()
 
+        shared_key = bytes(shared_key)
+
         print("Shared key:", shared_key.hex())
         print("Keys match!" if server_hash == client_hash else "Keys mismatch!")
 

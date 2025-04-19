@@ -65,9 +65,10 @@ class ClientThread(QThread):
         try:
             self.message_signal.emit(f"🔵 Подключение к {self.host}:{self.port}...")
             client.main()
-            self.key_signal.emit(client.shared_key)
+            self.key_signal.emit(bytes(client.shared_key))
         except Exception as e:
             self.message_signal.emit(f"🔴 Ошибка клиента: {str(e)}")
+
 
 
 class MainWindow(QMainWindow):

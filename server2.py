@@ -120,6 +120,7 @@ def decapsulate(ciphertext, sk, offset):
     m_enc_recovered = [(v[i] - w_adjusted[i]) % p for i in range(n)]
     m_recovered = decode_message(m_enc_recovered)
     shared_key = hash_shared(serialize_poly(m_recovered))
+    shared_key = bytes(shared_key)
     print("[Server] Decapsulated m_recovered:", m_recovered)
     return shared_key
 

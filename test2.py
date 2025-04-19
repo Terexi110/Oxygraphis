@@ -1,5 +1,5 @@
 import random
-from gostcrypto import gosthash
+from -gostcrypto import gosthash
 
 # Параметры для демонстрации (упрощённые и небезопасные)
 #q = 2**8  # Модуль для арифметики в кольце Z_q

@@ -1,5 +1,7 @@
+import base64
 import socket
 from gostcrypto import gosthash
+from gostcrypto import gostcipher
 import random
 import struct
 
@@ -11,6 +13,7 @@ threshold = 126
 d = q // p
 offset = d // 2
 
+shared_key = None
 ##########################
 # ФУНКЦИИ ДЛЯ ПОЛИНОМОВ
 ##########################
@@ -133,7 +136,33 @@ def decapsulate(ciphertext, sk, offset):
     return shared_key
 
 
+class Client:
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.crypto = None
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.connect((host, port))
+
+    def set_crypto(self, key):
+        self.crypto = gostcipher.new('kuznechik', key=key, cipher_mode='cbc')
+
+    def send(self, message):
+        encrypted = base64.b64encode(self.crypto.encrypt(message.encode()))
+        self.sock.sendall(encrypted)
+
+def send_encrypted_message(sock, crypto, message):
+    encrypted = crypto.encrypt(message)
+    sock.sendall(len(encrypted).to_bytes(4, 'big') + encrypted.encode('utf-8'))
+
+def receive_encrypted_message(sock, crypto):
+    length = int.from_bytes(sock.recv(4), 'big')
+    encrypted = sock.recv(length).decode('utf-8')
+    return crypto.decrypt(encrypted)
+
+
 def main():
+    global shared_key
     HOST = '127.0.0.1'
     PORT = 65433
 
@@ -170,7 +199,7 @@ def main():
 
         # Проверка хэша
         server_hash = recv_exact(32)
-        client_hash =gosthash.new('streebog256', data=shared_key).digest()
+        client_hash = gosthash.new('streebog256', data=shared_key).digest()
 
         print("Shared key:", shared_key.hex())
         print("Keys match!" if server_hash == client_hash else "Keys mismatch!")

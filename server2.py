@@ -1,5 +1,7 @@
+import base64
 import socket
 from gostcrypto import gosthash
+from gostcrypto import gostcipher
 import random
 import struct
 
@@ -183,6 +185,40 @@ def handle_client(conn, addr):
     finally:
         conn.close()
         print(f"Connection with {addr} closed.\n")
+
+def send_encrypted_message(sock, crypto, message):
+    encrypted = crypto.encrypt(message)
+    sock.sendall(len(encrypted).to_bytes(4, 'big') + encrypted.encode('utf-8'))
+
+def receive_encrypted_message(sock, crypto):
+    length = int.from_bytes(sock.recv(4), 'big')
+    encrypted = sock.recv(length).decode('utf-8')
+    return crypto.decrypt(encrypted)
+
+
+class Server:
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.crypto = None
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.bind((host, port))
+        self.sock.listen(1)
+
+    def set_crypto(self, key):
+        self.crypto = gostcipher.new('kuznechik', key=key, cipher_mode='cbc')
+
+    def run(self):
+        conn, addr = self.sock.accept()
+        with conn:
+            while True:
+                data = conn.recv(1024)
+                if not data:
+                    break
+                decrypted = self.crypto.decrypt(base64.b64decode(data))
+                print("Получено:", decrypted.decode())
+
+
 
 ##########################
 # Основная функция сервера

@@ -1,74 +1,11 @@
+import socket
 import sys
-from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6 import uic
 from gostcrypto import gostcipher
 import server2
 import client
-import base64
-
-
-class CryptoManager:
-    def __init__(self, key):
-        self.key = key
-
-    def encrypt(self, message):
-        """Шифрование сообщения алгоритмом Кузнечик"""
-        cipher_obj = gostcipher.new('kuznechik',
-                                    data=message.encode('utf-8'),
-                                    key=self.key,
-                                    cipher_mode='cbc',
-                                    init_vect=b'\x00' * 16)
-        return base64.b64encode(cipher_obj.encrypt()).decode('utf-8')
-
-    def decrypt(self, encrypted):
-        """Дешифрование сообщения алгоритмом Кузнечик"""
-        cipher_obj = gostcipher.new('kuznechik',
-                                    data=base64.b64decode(encrypted),
-                                    key=self.key,
-                                    cipher_mode='cbc',
-                                    init_vect=b'\x00' * 16)
-        return cipher_obj.decrypt().decode('utf-8').strip()
-
-
-class ServerThread(QThread):
-    message_signal = pyqtSignal(str)
-    key_signal = pyqtSignal(bytes)
-
-    def __init__(self, host, port):
-        super().__init__()
-        self.host = host
-        self.port = port
-        server2.HOST = host
-        server2.PORT = port
-
-    def run(self):
-        try:
-            self.message_signal.emit(f"🟢 Сервер запущен на {self.host}:{self.port}")
-            server2.main()
-        except Exception as e:
-            self.message_signal.emit(f"🔴 Ошибка сервера: {str(e)}")
-
-
-class ClientThread(QThread):
-    message_signal = pyqtSignal(str)
-    key_signal = pyqtSignal(bytes)
-
-    def __init__(self, host, port):
-        super().__init__()
-        self.host = host
-        self.port = port
-        client.HOST = host
-        client.PORT = port
-
-    def run(self):
-        try:
-            self.message_signal.emit(f"🔵 Подключение к {self.host}:{self.port}...")
-            client.main()
-            self.key_signal.emit(bytes(client.shared_key))
-        except Exception as e:
-            self.message_signal.emit(f"🔴 Ошибка клиента: {str(e)}")
-
 
 
 class MainWindow(QMainWindow):
@@ -78,6 +15,8 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self.crypto = None
         self.connection = None
+        self.server_thread = None
+        self.client_thread = None
 
     def init_ui(self):
         self.start_server_btn.clicked.connect(self.start_server)
@@ -85,8 +24,64 @@ class MainWindow(QMainWindow):
         self.send_btn.clicked.connect(self.send_message)
         self.stop_btn.clicked.connect(self.stop_all)
 
-        self.ip_text.setText("127.0.0.1")
+        self.ip_text.setText("0.0.0.0")
         self.port_text.setText("65433")
+
+        self.message_received.connect(self.show_message)
+
+    message_received = pyqtSignal(str)
+
+    def start_server(self):
+        ip, port = self.get_connection_params()
+        if ip is None:
+            return
+        self.server_thread = ServerThread(ip, port)
+        self.server_thread.main_window = self
+        self.server_thread.status_signal.connect(self.show_message)
+        self.server_thread.message_received.connect(self.message_received.emit)
+        self.server_thread.start()
+
+    def start_client(self):
+        ip, port = self.get_connection_params()
+        if ip is None:
+            return
+        self.client_thread = ClientThread(ip, port)
+        self.client_thread.main_window = self
+        self.client_thread.status_signal.connect(self.show_message)
+        self.client_thread.message_received.connect(self.message_received.emit)
+        self.client_thread.start()
+
+    def stop_all(self):
+        if hasattr(self, 'server_thread') and self.server_thread.isRunning():
+            self.server_thread.terminate()
+        if hasattr(self, 'client_thread') and self.client_thread.isRunning():
+            self.client_thread.terminate()
+        self.show_message("⏹ Соединение остановлено")
+        self.crypto = None
+        self.connection = None
+        if self.crypto:
+            self.crypto = None
+
+    def send_message(self):
+        if not (self.server_thread or self.client_thread):
+            self.show_message("🔴 Сначала подключитесь!")
+            return
+
+        msg = self.message_input.text()
+        if not msg:
+            return
+
+        encrypted = self.crypto.encrypt(msg.encode())
+        try:
+            if self.server_thread:
+                self.server_thread.conn.send(len(encrypted).to_bytes(4, 'big') + encrypted)
+            else:
+                self.client_thread.sock.send(len(encrypted).to_bytes(4, 'big') + encrypted)
+                self.show_message(f"Вы: {msg}")
+        except Exception as e:
+            self.show_message(f"🔴 Ошибка отправки: {str(e)}")
+
+        self.message_input.clear()
 
     def get_connection_params(self):
         ip = self.ip_text.text().strip()
@@ -100,62 +95,103 @@ class MainWindow(QMainWindow):
             self.show_message("🔴 Некорректный порт!")
             return None, None
 
-    def start_server(self):
-        ip, port = self.get_connection_params()
-        if not ip or not port: return
+    def show_message(self, message):
+        self.statusBar().showMessage(message)
 
-        self.server_thread = ServerThread(ip, port)
-        self.server_thread.message_signal.connect(self.show_message)
-        self.server_thread.key_signal.connect(self.init_crypto)
-        self.server_thread.start()
-        self.connection = 'server'
 
-    def start_client(self):
-        ip, port = self.get_connection_params()
-        if not ip or not port: return
+class ServerThread(QThread):
+    message_received = pyqtSignal(str)
+    status_signal = pyqtSignal(str)
 
-        self.client_thread = ClientThread(ip, port)
-        self.client_thread.message_signal.connect(self.show_message)
-        self.client_thread.key_signal.connect(self.init_crypto)
-        self.client_thread.start()
-        self.connection = 'client'
+    def __init__(self, ip, port):
+        super().__init__()
+        self.ip = ip
+        self.port = port
+        self.running = True
 
-    def init_crypto(self, key):
-        self.crypto = CryptoManager(key)
-        self.show_message("🔑 Криптографическая система активирована")
-
-    def send_message(self):
-        if not self.crypto:
-            self.show_message("🔴 Сначала установите соединение!")
-            return
-
-        message = self.message_input.toPlainText().strip()
-        if not message:
-            self.show_message("🔴 Введите сообщение!")
-            return
-
+    def run(self):
         try:
-            encrypted = self.crypto.encrypt(message)
-            if self.connection == 'client':
-                self.client.sock.sendall(encrypted.encode())
-            elif self.connection == 'server':
-                self.server.conn.sendall(encrypted.encode())
-            self.show_message(f"📤 Вы: {message}")
-            self.message_input.clear()
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.sock.bind((self.ip, self.port))
+            self.sock.listen()
+            self.status_signal.emit("🟢 Сервер запущен")
+            while self.running:
+                conn, addr = self.sock.accept()
+                self.conn = conn
+                self.status_signal.emit(f"🔗 Подключен клиент: {addr}")
+                while self.running:
+                    data = self.recv_exact(conn, 4)
+                    if not data:
+                        break
+                    length = int.from_bytes(data, 'big')
+                    encrypted_msg = self.recv_exact(conn, length)
+                    decrypted = self.main_window.crypto.decrypt(encrypted_msg)
+                    self.message_received.emit(f"Клиент: {decrypted.decode()}")
         except Exception as e:
-            self.show_message(f"🔴 Ошибка отправки: {str(e)}")
+            self.status_signal.emit(f"🔴 Ошибка: {str(e)}")
 
-    def stop_all(self):
-        if hasattr(self, 'server_thread') and self.server_thread.isRunning():
-            self.server_thread.terminate()
-        if hasattr(self, 'client_thread') and self.client_thread.isRunning():
-            self.client_thread.terminate()
-        self.show_message("⏹ Соединение остановлено")
-        self.crypto = None
-        self.connection = None
+    def recv_exact(self, conn, length):
+        data = b''
+        while len(data) < length:
+            packet = conn.recv(length - len(data))
+            if not packet:
+                break
+            data += packet
+        return data
 
-    def show_message(self, text):
-        self.statusBar().showMessage(text)
+    def stop(self):
+        self.running = False
+        if hasattr(self, 'sock'):
+            self.sock.close()
+
+class ClientThread(QThread):
+    message_received = pyqtSignal(str)
+    status_signal = pyqtSignal(str)
+
+    def __init__(self, ip, port):
+        super().__init__()
+        self.ip = ip
+        self.port = port
+
+    def run(self):
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.connect((self.ip, self.port))
+            self.status_signal.emit("🟢 Подключено к серверу")
+            while True:
+                data = self.recv_exact(4)
+                if not data:
+                    break
+                length = int.from_bytes(data, 'big')
+                encrypted_msg = self.recv_exact(length)
+                decrypted = self.main_window.crypto.decrypt(encrypted_msg)
+                self.message_received.emit(f"Сервер: {decrypted.decode()}")
+        except Exception as e:
+            self.status_signal.emit(f"🔴 Ошибка: {str(e)}")
+
+    def recv_exact(self, length):
+        data = b''
+        while len(data) < length:
+            packet = self.sock.recv(length - len(data))
+            if not packet:
+                break
+            data += packet
+        return data
+
+
+class KuznechikCipher:
+    def __init__(self, key):
+        self.key = key
+        self.iv = b'\x00'*16  # Для режима CBC требуется IV
+
+    def encrypt(self, plaintext):
+        cipher = gostcipher.new('kuznechik', self.key, gostcipher.MODE_CBC, init_vect=self.iv)
+        return cipher.encrypt(plaintext)
+
+    def decrypt(self, ciphertext):
+        cipher = gostcipher.new('kuznechik', self.key, gostcipher.MODE_CBC, init_vect=self.iv)
+        return cipher.decrypt(ciphertext)
 
 
 if __name__ == "__main__":

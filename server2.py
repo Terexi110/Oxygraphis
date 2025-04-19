@@ -1,9 +1,8 @@
-import base64
 import socket
 from gostcrypto import gosthash
-from gostcrypto import gostcipher
 import random
 import struct
+import GUI
 
 # Параметры
 q = 2**12
@@ -13,6 +12,7 @@ threshold = 126
 d = q // p
 offset = d // 2
 
+global shared_key
 ##########################
 # ФУНКЦИИ ДЛЯ ПОЛИНОМОВ
 ##########################
@@ -33,10 +33,10 @@ def poly_mul(a, b, mod):
 # ФУНКЦИИ ОКРУГЛЕНИЯ И HINT
 ##########################
 
-def poly_round(poly, d, offset):
+def poly_round(poly):
     return [int((x + offset) / d) % p for x in poly]
 
-def compute_hint(poly_raw, d, threshold):
+def compute_hint(poly_raw):
     return [1 if (x % d) >= threshold else 0 for x in poly_raw]
 
 ##########################
@@ -54,7 +54,7 @@ def decode_message(poly):
 def serialize_poly(poly):
     return b''.join(struct.pack('!H', coeff % (2**16)) for coeff in poly)
 
-def deserialize_poly(data, n):
+def deserialize_poly(data):
     return list(struct.unpack('!{}H'.format(n), data))
 
 def hash_shared(data):
@@ -89,33 +89,33 @@ def reconcile(value, hint):
         return value - 1
     return value
 
-def keygen(offset):
+def keygen():
     a = generate_uniform_poly(q)
     s = sample_secret()  # Секретный ключ для отправителя
     as_product = poly_mul(a, s, q)
-    b = poly_round(as_product, d, offset)
+    b = poly_round(as_product)
     pk = (a, b)
     return pk, s
 
-def encapsulate(pk, offset, threshold):
+def encapsulate(pk):
     a, b = pk
     m = [random.choice([0, 1]) for _ in range(n)]
     m_enc = encode_message(m)
     s_prime = sample_secret()
     u_product = poly_mul(a, s_prime, q)
-    u = poly_round(u_product, d, offset)
+    u = poly_round(u_product)
     b_product = poly_mul(b, s_prime, q)
-    hint = compute_hint(b_product, d, threshold)
-    v_round = poly_round(b_product, d, offset)
+    hint = compute_hint(b_product)
+    v_round = poly_round(b_product)
     v = [(v_round[i] + m_enc[i]) % p for i in range(n)]
     ciphertext = (u, v, hint)
     shared_key = hash_shared(serialize_poly(m))
     return ciphertext, shared_key
 
-def decapsulate(ciphertext, sk, offset):
+def decapsulate(ciphertext, sk):
     u, v, hint = ciphertext
     us_product = poly_mul(u, sk, q)
-    w = poly_round(us_product, d, offset)
+    w = poly_round(us_product)
     w_adjusted = [reconcile(w[i], hint[i]) for i in range(n)]
     m_enc_recovered = [(v[i] - w_adjusted[i]) % p for i in range(n)]
     m_recovered = decode_message(m_enc_recovered)
@@ -140,6 +140,7 @@ def cleanup():
 ##########################
 
 def handle_client(conn, addr):
+    global shared_key
     print(f"Connected by {addr}")
 
     def recv_exact(length):
@@ -153,7 +154,7 @@ def handle_client(conn, addr):
 
     try:
         # Генерация ключей
-        pk, sk = keygen(offset)
+        pk, sk = keygen()
         a, b = pk
 
         # Сериализация публичного ключа
@@ -166,59 +167,27 @@ def handle_client(conn, addr):
 
         # Прием ciphertext
         u_len = int.from_bytes(recv_exact(4), 'big')
-        u = deserialize_poly(recv_exact(u_len), n)
+        u = deserialize_poly(recv_exact(u_len))
 
         v_len = int.from_bytes(recv_exact(4), 'big')
-        v = deserialize_poly(recv_exact(v_len), n)
+        v = deserialize_poly(recv_exact(v_len))
 
         hint_len = int.from_bytes(recv_exact(4), 'big')
         hint = list(recv_exact(hint_len))
 
         ciphertext = (u, v, hint)
-        shared_key = decapsulate(ciphertext, sk, offset)
+        shared_key = decapsulate(ciphertext, sk)
 
         # Отправка подтверждения в виде хэша
         confirmation = gosthash.new('streebog256', data=shared_key).digest()
         conn.sendall(confirmation)
+        GUI.crypto = GUI.KuznechikCipher(shared_key)
         print("Shared key:", shared_key.hex())
     except Exception as e:
         print(f"Error handling client {addr}: {e}")
     finally:
         conn.close()
         print(f"Connection with {addr} closed.\n")
-
-def send_encrypted_message(sock, crypto, message):
-    encrypted = crypto.encrypt(message)
-    sock.sendall(len(encrypted).to_bytes(4, 'big') + encrypted.encode('utf-8'))
-
-def receive_encrypted_message(sock, crypto):
-    length = int.from_bytes(sock.recv(4), 'big')
-    encrypted = sock.recv(length).decode('utf-8')
-    return crypto.decrypt(encrypted)
-
-
-class Server:
-    def __init__(self, host, port):
-        self.host = host
-        self.port = port
-        self.crypto = None
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.bind((host, port))
-        self.sock.listen(1)
-
-    def set_crypto(self, key):
-        self.crypto = gostcipher.new('kuznechik', key=key, cipher_mode='cbc')
-
-    def run(self):
-        conn, addr = self.sock.accept()
-        with conn:
-            while True:
-                data = conn.recv(1024)
-                if not data:
-                    break
-                decrypted = self.crypto.decrypt(base64.b64decode(data))
-                print("Получено:", decrypted.decode())
-
 
 
 ##########################

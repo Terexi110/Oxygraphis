@@ -4,11 +4,12 @@ import hashlib
 import matplotlib.pyplot as plt
 
 # Параметры для демонстрации (упрощённые и небезопасные)
-q = 2**8  # Модуль для арифметики в кольце Z_q
-p = 2**4  # Новая точность после округления (результат в Z_p)
-n = 2**2   # Степень полинома (число коэффициентов)
-d = q // p  # Фактор деления для округления (d = 16)
-#res = []
+q = 2**12
+p = 32
+n = 32
+threshold = 126
+d = q // p
+offset = d // 2
 
 
 ##########################
@@ -137,7 +138,7 @@ def decapsulate(ciphertext, sk, offset):
     shared_key = hash_shared(serialize_poly(m_recovered))
     return shared_key
 
-def test_kem(trials, offset, threshold):
+def test_kem(trials):
     """
     Функция тестирования КЕМ:
       trials – количество итераций,
@@ -152,44 +153,9 @@ def test_kem(trials, offset, threshold):
         shared_key_dec = decapsulate(ciphertext, sk, offset)
         if shared_key_enc == shared_key_dec:
             success += 1
-    #print(threshold, success / trials)
-    res.append([threshold, success / trials])
+    print(success / trials)
 
 ##########################
 # Эксперимент и построение графика
 ##########################
-res = []
-for threshold in range(1, 65):
-    test_kem(1000, d // 2, threshold)
-"""n = 16
-for q1 in [64, 128, 256, 512, 1024, 2048, 4096]:
-    for p1 in [16, 32, 64, 128, 256, 512, 1024, 2048]:
-            p = p1
-            q = q1
-            d = q // p + 1
-            if d != 1:
-                try:
-                    test_kem(1000, d / 2, 17)
-                except:
-                    pass
-"""
-"""res = sorted(res, key=lambda x: x[-1])
-for i in res:
-    print(*i)"""
-
-thresholds = [item[0] for item in res]
-rates = [item[1] for item in res]
-
-for i in res:
-    print(*i)
-
-plt.figure(figsize=(8, 6))
-plt.plot(thresholds, rates, marker='o', linestyle='-', color='b', label='Rate vs Threshold')
-
-plt.title('Зависимость Rate от Threshold')
-plt.xlabel('Threshold')
-plt.ylabel('Rate')
-plt.grid(True)
-plt.legend()
-
-plt.show()
+test_kem(1000)

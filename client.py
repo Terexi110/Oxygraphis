@@ -3,7 +3,6 @@ from gostcrypto import gosthash
 from gostcrypto import gostcipher
 import random
 import struct
-import GUI
 
 # Параметры
 q = 2**12
@@ -134,51 +133,57 @@ def decapsulate(ciphertext, sk):
     shared_key = hash_shared(serialize_poly(m_recovered))
     return shared_key
 
+##########################
+# Функция для отправки и приёма зашифрованных сообщений
+##########################
 
 def main():
     HOST = '127.0.0.1'
     PORT = 65433
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((HOST, PORT))
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((HOST, PORT))
 
-        def recv_exact(length):
-            data = b''
-            while len(data) < length:
-                packet = s.recv(length - len(data))
-                if not packet:
-                    break
-                data += packet
-            return data
+    def recv_exact(length):
+        data = b''
+        while len(data) < length:
+            packet = s.recv(length - len(data))
+            if not packet:
+                break
+            data += packet
+        return data
 
         # Прием публичного ключа в правильном порядке
-        a_len = int.from_bytes(recv_exact(4), 'big')  # Сначала длина a
-        a_data = recv_exact(a_len)
-        a = deserialize_poly(a_data)
 
-        b_len = int.from_bytes(recv_exact(4), 'big')  # Затем длина b
-        b_data = recv_exact(b_len)
-        b = deserialize_poly(b_data)
+    a_len = int.from_bytes(recv_exact(4), 'big')  # Сначала длина a
+    a_data = recv_exact(a_len)
+    a = deserialize_poly(a_data)
 
-        pk = (a, b)
-        
-        # Генерация и отправка ciphertext
-        ciphertext, shared_key = encapsulate(pk)
-        u, v, hint = ciphertext
+    b_len = int.from_bytes(recv_exact(4), 'big')  # Затем длина b
+    b_data = recv_exact(b_len)
+    b = deserialize_poly(b_data)
 
-        s.sendall(len(serialize_poly(u)).to_bytes(4, 'big') + serialize_poly(u))
-        s.sendall(len(serialize_poly(v)).to_bytes(4, 'big') + serialize_poly(v))
-        s.sendall(len(bytes(hint)).to_bytes(4, 'big') + bytes(hint))
+    pk = (a, b)
 
-        # Проверка хэша
-        server_hash = recv_exact(32)
-        client_hash = gosthash.new('streebog256', data=shared_key).digest()
+    # Генерация и отправка ciphertext
+    ciphertext, shared_key = encapsulate(pk)
+    u, v, hint = ciphertext
 
-        shared_key = bytes(shared_key)
+    s.sendall(len(serialize_poly(u)).to_bytes(4, 'big') + serialize_poly(u))
+    s.sendall(len(serialize_poly(v)).to_bytes(4, 'big') + serialize_poly(v))
+    s.sendall(len(bytes(hint)).to_bytes(4, 'big') + bytes(hint))
 
-        GUI.crypto = GUI.KuznechikCipher(shared_key)
-        print("Shared key:", shared_key.hex())
-        print("Keys match!" if server_hash == client_hash else "Keys mismatch!")
+    # Проверка хэша
+    server_hash = recv_exact(32)
+    client_hash = gosthash.new('streebog256', data=shared_key).digest()
+
+    shared_key = bytes(shared_key)
+
+    print("Shared key:", shared_key.hex())
+    print("Keys match!" if server_hash == client_hash else "Keys mismatch!")
+
+    return s, shared_key, 1 if server_hash == client_hash else 0
+
 
 if __name__ == "__main__":
     main()

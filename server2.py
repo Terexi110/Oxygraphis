@@ -1,8 +1,8 @@
 import socket
 from gostcrypto import gosthash
+from gostcrypto import gostcipher
 import random
 import struct
-import GUI
 
 # Параметры
 q = 2**12
@@ -135,6 +135,7 @@ def cleanup():
         except Exception as e:
             print(f"Error closing socket: {e}")
 
+
 ##########################
 # Функция для приема одного соединения
 ##########################
@@ -181,7 +182,6 @@ def handle_client(conn, addr):
         # Отправка подтверждения в виде хэша
         confirmation = gosthash.new('streebog256', data=shared_key).digest()
         conn.sendall(confirmation)
-        GUI.crypto = GUI.KuznechikCipher(shared_key)
         print("Shared key:", shared_key.hex())
     except Exception as e:
         print(f"Error handling client {addr}: {e}")

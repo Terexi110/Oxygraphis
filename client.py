@@ -1,5 +1,7 @@
 import argparse
 import socket
+import threading
+
 from gostcrypto import gosthash
 import random
 import struct
@@ -155,6 +157,31 @@ def main():
     HOST = args.host
     PORT = 65433
 
+    def receive_messages():
+        while True:
+            try:
+                msg_length_data = s.recv(4)
+                if not msg_length_data:
+                    break
+                msg_length = int.from_bytes(msg_length_data, 'big')
+                message = s.recv(msg_length).decode('utf-8')
+                print(f"\nСервер: {message}\nВы: ", end='')
+            except:
+                break
+
+    def send_messages():
+        while True:
+            try:
+                message = input("Вы: ")
+                if message.lower() == 'exit':
+                    s.close()
+                    break
+                data = message.encode('utf-8')
+                s.sendall(len(data).to_bytes(4, 'big'))
+                s.sendall(data)
+            except:
+                break
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
 
@@ -199,19 +226,14 @@ def main():
             f.write(shared_key)
 
         print("Начало чата (введите 'exit' для выхода)")
-        while True:
-            # Отправка сообщения
-            message = input("Вы: ")
-            if message.lower() == 'exit':
-                break
+        receive_thread = threading.Thread(target=receive_messages)
+        send_thread = threading.Thread(target=send_messages)
 
-            s.sendall(len(message.encode()).to_bytes(4, 'big'))
-            s.sendall(message.encode())
+        receive_thread.start()
+        send_thread.start()
 
-            # Получение ответа
-            resp_length = int.from_bytes(recv_exact(4), 'big')
-            response = recv_exact(resp_length).decode()
-            print(f"Сервер: {response}")
+        receive_thread.join()
+        send_thread.join()
 
 
 if __name__ == "__main__":

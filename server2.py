@@ -144,9 +144,35 @@ def handle_client(conn, addr):
         while len(data) < length:
             packet = conn.recv(length - len(data))
             if not packet:
-                break
+                return None
             data += packet
         return data
+
+    def receive_messages():
+        while True:
+            try:
+                # Прием сообщения
+                msg_length_data = recv_exact(4)
+                if not msg_length_data:
+                    break
+                msg_length = int.from_bytes(msg_length_data, 'big')
+                message = recv_exact(msg_length).decode('utf-8')
+                print(f"[Клиент {addr}]: {message}")
+            except:
+                break
+
+    def send_messages():
+        while True:
+            try:
+                message = input("Сервер: ")
+                if message.lower() == 'exit':
+                    conn.close()
+                    break
+                data = message.encode('utf-8')
+                conn.sendall(len(data).to_bytes(4, 'big'))
+                conn.sendall(data)
+            except:
+                break
 
     try:
         # Генерация ключей
@@ -193,6 +219,15 @@ def handle_client(conn, addr):
 
         with open('server_key.bin', 'wb') as f:
             f.write(shared_key)
+
+        receive_thread = threading.Thread(target=receive_messages)
+        send_thread = threading.Thread(target=send_messages)
+
+        receive_thread.start()
+        send_thread.start()
+
+        receive_thread.join()
+        send_thread.join()
     except Exception as e:
         print(f"Error handling client {addr}: {e}")
     finally:

@@ -1,9 +1,9 @@
-import atexit
 import socket
-import hashlib
-import random
-import struct
-import sys
+import threading
+
+from gostcrypto import gosthash
+from gostcrypto import gostcipher
+from Oxygraphs import *
 
 # Параметры
 q = 2**12
@@ -13,126 +13,76 @@ threshold = 126
 d = q // p
 offset = d // 2
 
-##########################
-# ФУНКЦИИ ДЛЯ ПОЛИНОМОВ
-##########################
+server_socket = None
+shared_key = None
 
-def poly_mul(a, b, mod):
-    """Умножение двух полиномов в кольце Z_mod[x]/(x^n+1)"""
-    result = [0] * n
-    for i in range(n):
-        for j in range(n):
-            k = i + j
-            if k < n:
-                result[k] = (result[k] + a[i] * b[j]) % mod
-            else:
-                result[k - n] = (result[k - n] - a[i] * b[j]) % mod
-    return [x % mod for x in result]
 
-##########################
-# Кастомизированные функции округления и hint
-##########################
+class Peer:
+    def __init__(self, host='127.0.0.1', port=65433):
+        self.host = host
+        self.port = port
+        self.shared_key = None
+        self.connections = []
+        self.listener = None
 
-def poly_round(poly, d, offset):
-    """
-    Округление: вычисляем floor((x+offset)/d) для каждого коэффициента.
-    Обычно offset выбирают равным d//2.
-    """
-    return [int((x + offset) / d) % p for x in poly]
+    def start(self):
+        """Запуск в двух потоках: слушатель и возможность подключения к другим пирам"""
+        import threading
+        self.listener = threading.Thread(target=self._listen)
+        self.listener.start()
+        print(f"Peer started on {self.host}:{self.port}")
 
-def compute_hint(poly_raw, d, threshold):
-    """
-    Вычисление hint: для каждого коэффициента, если остаток от деления на d больше или равен threshold, возвращаем 1, иначе 0.
-    """
-    return [1 if (x % d) >= threshold else 0 for x in poly_raw]
+    def _listen(self):
+        """Прослушивание входящих соединений"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((self.host, self.port))
+            s.listen()
+            while True:
+                conn, addr = s.accept()
+                print(f"Connected by {addr}")
+                self.connections.append(conn)
+                threading.Thread(target=self._handle_connection, args=(conn,)).start()
 
-##########################
-# Кодирование/декодирование сообщения
-##########################
+    def _handle_connection(self, conn):
+        """Обработка ключей и сообщений для конкретного соединения"""
+        try:
+            # Обмен ключами
+            pk, sk = keygen()
+            conn.send(serialize_poly(pk[0]))  # Отправка публичного ключа
+            u = deserialize_poly(conn.recv(1024))  # Получение ciphertext
+            self.shared_key = decapsulate(u, sk)  # Сохранение ключа для этого соединения
 
-def encode_message(m):
-    """Кодирование: 0 -> 0, 1 -> p//2"""
-    return [bit * (p // 2) for bit in m]
+            # Цикл приема сообщений
+            while True:
+                data = conn.recv(1024)
+                if not data: break
+                print("Received:", self._decrypt(data))
+        finally:
+            conn.close()
 
-def decode_message(poly):
-    """Декодирование: значение >= p//2 интерпретируется как 1, иначе 0"""
-    return [1 if coeff >= (p // 2) else 0 for coeff in poly]
+    def connect(self, peer_host, peer_port):
+        """Подключение к другому пиру"""
+        conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        conn.connect((peer_host, peer_port))
+        self.connections.append(conn)
 
-def serialize_poly(poly):
-    """Сериализация списка целых чисел в байты (2 байта на коэффициент)."""
-    return b''.join(struct.pack('!H', coeff % (2**16)) for coeff in poly)
+        # Обмен ключами
+        their_pk = deserialize_poly(conn.recv(1024))
+        ciphertext, key = encapsulate(their_pk)
+        conn.send(serialize_poly(ciphertext))
+        self.shared_key = key  # Сохранение ключа
 
-# Новая функция десериализации
-def deserialize_poly(data, n):
-    """Десериализация байтов в список целых чисел."""
-    return list(struct.unpack('!{}H'.format(n), data))
+        threading.Thread(target=self._handle_connection, args=(conn,)).start()
 
-def hash_shared(data):
-    """Хэширование (SHA-256) для получения общего ключа"""
-    return hashlib.sha256(data).digest()
-
-##########################
-# Функции для сэмплирования и генерации полиномов
-##########################
-
-def generate_uniform_poly(mod):
-    """Генерация случайного полинома с коэффициентами из Z_mod."""
-    return [random.randrange(mod) for _ in range(n)]
-
-def sample_secret():
-    """Сэмплирование секретного полинома с малыми коэффициентами (здесь выбираем 0 или 1)."""
-    return [random.choice([0, 1]) for _ in range(n)]
-
-##########################
-# Функция reconcile (корректировка)
-##########################
-
-def reconcile(value, hint):
-    if hint == 1 and value < (p - 1):
-        return value + 1
-    elif hint == 0 and value > 0:
-        return value - 1
-    return value
-
-def keygen(offset):
-    a = generate_uniform_poly(q)
-    s = sample_secret()  # Секретный ключ для отправителя
-    as_product = poly_mul(a, s, q)
-    b = poly_round(as_product, d, offset)
-    pk = (a, b)  # Публичный ключ
-    # Секретный ключ не передается!
-    return pk, s  # Возвращаем только публичный ключ
-
-def encapsulate(pk, offset, threshold):
-    a, b = pk
-    m = [random.choice([0, 1]) for _ in range(n)]
-    m_enc = encode_message(m)
-    s_prime = sample_secret()  # Эфемерный секрет для сессии
-    u_product = poly_mul(a, s_prime, q)
-    u = poly_round(u_product, d, offset)
-    b_product = poly_mul(b, s_prime, q)
-    hint = compute_hint(b_product, d, threshold)
-    v_round = poly_round(b_product, d, offset)
-    v = [(v_round[i] + m_enc[i]) % p for i in range(n)]
-    ciphertext = (u, v, hint)
-    shared_key = hash_shared(serialize_poly(m))  # Общий ключ для проверки
-    return ciphertext, shared_key
-
-def decapsulate(ciphertext, sk, offset):
-    u, v, hint = ciphertext
-    us_product = poly_mul(u, sk, q)
-    w = poly_round(us_product, d, offset)
-    w_adjusted = [reconcile(w[i], hint[i]) for i in range(n)]
-    m_enc_recovered = [(v[i] - w_adjusted[i]) % p for i in range(n)]
-    m_recovered = decode_message(m_enc_recovered)
-    shared_key = hash_shared(serialize_poly(m_recovered))
-
-    print("[Server] Decapsulated m_recovered:", m_recovered)
-    return shared_key
+    def send(self, message):
+        """Отправка сообщения всем подключенным пирам"""
+        if not self.shared_key: return
+        encrypted = self._encrypt(message)
+        for conn in self.connections:
+            conn.send(encrypted)
 
 def cleanup():
-    """Функция для корректного закрытия ресурсов"""
-    global server_socket
     if 'server_socket' in globals() and server_socket:
         print("\nClosing server socket...")
         try:
@@ -142,62 +92,27 @@ def cleanup():
         except Exception as e:
             print(f"Error closing socket: {e}")
 
-def socketOx():
-    global server_socket
+
+##########################
+# Основная функция сервера
+##########################
+
+def main():
     HOST = '127.0.0.1'
     PORT = 65433
 
-    main(HOST, PORT)
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind((HOST, PORT))
+    server_socket.listen()
+    print(f"Server is listening on {HOST}:{PORT}")
 
-
-def main(HOST, PORT):
-    def recv_exact(length):  # Функция теперь внутри main()
-        data = b''
-        while len(data) < length:
-            packet = conn.recv(length - len(data))
-            if not packet:
-                break
-            data += packet
-        return data
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((HOST, PORT))
-        s.listen()
-        print("Server is listening...")
-        conn, addr = s.accept()
-        with conn:
-            print(f"Connected by {addr}")
-
-            # Генерация ключей
-            pk, sk = keygen(offset)
-            a, b = pk
-
-            # Сериализация публичного ключа
-            a_bytes = serialize_poly(a)
-            b_bytes = serialize_poly(b)
-
-            # Отправка с указанием длины
-            conn.sendall(len(a_bytes).to_bytes(4, 'big') + a_bytes)
-            conn.sendall(len(b_bytes).to_bytes(4, 'big') + b_bytes)
-
-            # Прием ciphertext
-            u_len = int.from_bytes(recv_exact(4), 'big')
-            u = deserialize_poly(recv_exact(u_len), n)  # Исправлено
-
-            v_len = int.from_bytes(recv_exact(4), 'big')
-            v = deserialize_poly(recv_exact(v_len), n)  # Исправлено
-
-            hint_len = int.from_bytes(recv_exact(4), 'big')
-            hint = list(recv_exact(hint_len))  # hint уже список 0/1
-
-            ciphertext = (u, v, hint)
-            shared_key = decapsulate(ciphertext, sk, offset)
-
-            # Проверка и отправка хэша
-            confirmation = hashlib.sha256(shared_key).digest()
-            conn.sendall(confirmation)
-            print("Shared key:", shared_key.hex())
-
+    while True:
+        conn, addr = server_socket.accept()
+        handle_client(conn, addr)
 
 if __name__ == "__main__":
-    socketOx()
+    try:
+        main()
+    finally:
+        cleanup()

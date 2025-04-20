@@ -1,6 +1,5 @@
 import socket
 from gostcrypto import gosthash
-from gostcrypto import gostcipher
 import random
 import struct
 
@@ -12,7 +11,6 @@ threshold = 126
 d = q // p
 offset = d // 2
 
-global shared_key
 ##########################
 # ФУНКЦИИ ДЛЯ ПОЛИНОМОВ
 ##########################
@@ -33,10 +31,10 @@ def poly_mul(a, b, mod):
 # ФУНКЦИИ ОКРУГЛЕНИЯ И HINT
 ##########################
 
-def poly_round(poly):
+def poly_round(poly, d, offset):
     return [int((x + offset) / d) % p for x in poly]
 
-def compute_hint(poly_raw):
+def compute_hint(poly_raw, d, threshold):
     return [1 if (x % d) >= threshold else 0 for x in poly_raw]
 
 ##########################
@@ -54,7 +52,7 @@ def decode_message(poly):
 def serialize_poly(poly):
     return b''.join(struct.pack('!H', coeff % (2**16)) for coeff in poly)
 
-def deserialize_poly(data):
+def deserialize_poly(data, n):
     return list(struct.unpack('!{}H'.format(n), data))
 
 def hash_shared(data):
@@ -89,38 +87,37 @@ def reconcile(value, hint):
         return value - 1
     return value
 
-def keygen():
+def keygen(offset):
     a = generate_uniform_poly(q)
     s = sample_secret()  # Секретный ключ для отправителя
     as_product = poly_mul(a, s, q)
-    b = poly_round(as_product)
+    b = poly_round(as_product, d, offset)
     pk = (a, b)
     return pk, s
 
-def encapsulate(pk):
+def encapsulate(pk, offset, threshold):
     a, b = pk
     m = [random.choice([0, 1]) for _ in range(n)]
     m_enc = encode_message(m)
     s_prime = sample_secret()
     u_product = poly_mul(a, s_prime, q)
-    u = poly_round(u_product)
+    u = poly_round(u_product, d, offset)
     b_product = poly_mul(b, s_prime, q)
-    hint = compute_hint(b_product)
-    v_round = poly_round(b_product)
+    hint = compute_hint(b_product, d, threshold)
+    v_round = poly_round(b_product, d, offset)
     v = [(v_round[i] + m_enc[i]) % p for i in range(n)]
     ciphertext = (u, v, hint)
     shared_key = hash_shared(serialize_poly(m))
     return ciphertext, shared_key
 
-def decapsulate(ciphertext, sk):
+def decapsulate(ciphertext, sk, offset):
     u, v, hint = ciphertext
     us_product = poly_mul(u, sk, q)
-    w = poly_round(us_product)
+    w = poly_round(us_product, d, offset)
     w_adjusted = [reconcile(w[i], hint[i]) for i in range(n)]
     m_enc_recovered = [(v[i] - w_adjusted[i]) % p for i in range(n)]
     m_recovered = decode_message(m_enc_recovered)
     shared_key = hash_shared(serialize_poly(m_recovered))
-    shared_key = bytes(shared_key)
     print("[Server] Decapsulated m_recovered:", m_recovered)
     return shared_key
 
@@ -135,13 +132,11 @@ def cleanup():
         except Exception as e:
             print(f"Error closing socket: {e}")
 
-
 ##########################
 # Функция для приема одного соединения
 ##########################
 
 def handle_client(conn, addr):
-    global shared_key
     print(f"Connected by {addr}")
 
     def recv_exact(length):
@@ -155,7 +150,7 @@ def handle_client(conn, addr):
 
     try:
         # Генерация ключей
-        pk, sk = keygen()
+        pk, sk = keygen(offset)
         a, b = pk
 
         # Сериализация публичного ключа
@@ -168,27 +163,27 @@ def handle_client(conn, addr):
 
         # Прием ciphertext
         u_len = int.from_bytes(recv_exact(4), 'big')
-        u = deserialize_poly(recv_exact(u_len))
+        u = deserialize_poly(recv_exact(u_len), n)
 
         v_len = int.from_bytes(recv_exact(4), 'big')
-        v = deserialize_poly(recv_exact(v_len))
+        v = deserialize_poly(recv_exact(v_len), n)
 
         hint_len = int.from_bytes(recv_exact(4), 'big')
         hint = list(recv_exact(hint_len))
 
         ciphertext = (u, v, hint)
-        shared_key = decapsulate(ciphertext, sk)
+        shared_key = decapsulate(ciphertext, sk, offset)
 
         # Отправка подтверждения в виде хэша
         confirmation = gosthash.new('streebog256', data=shared_key).digest()
         conn.sendall(confirmation)
         print("Shared key:", shared_key.hex())
+        return shared_key
     except Exception as e:
         print(f"Error handling client {addr}: {e}")
     finally:
         conn.close()
         print(f"Connection with {addr} closed.\n")
-
 
 ##########################
 # Основная функция сервера

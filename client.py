@@ -1,3 +1,4 @@
+import argparse
 import socket
 from gostcrypto import gosthash
 import random
@@ -147,8 +148,15 @@ def decapsulate(ciphertext, sk, offset):
 
 
 def main():
-    HOST = '127.0.0.1'
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--host', type=str, default='192.168.235.124', help='Server IP address')
+    args = parser.parse_args()
+
+    HOST = args.host
     PORT = 65433
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((HOST, PORT))
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
@@ -187,6 +195,8 @@ def main():
 
         print("Shared key:", shared_key.hex())
         print("Keys match!" if server_hash == client_hash else "Keys mismatch!")
+        with open('client_key.bin', 'wb') as f:
+            f.write(shared_key)
         return shared_key
 
 

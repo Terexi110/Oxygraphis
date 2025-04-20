@@ -178,7 +178,8 @@ def handle_client(conn, addr):
         confirmation = gosthash.new('streebog256', data=shared_key).digest()
         conn.sendall(confirmation)
         print("Shared key:", shared_key.hex())
-        return shared_key
+        with open('server_key.bin', 'wb') as f:
+            f.write(shared_key)
     except Exception as e:
         print(f"Error handling client {addr}: {e}")
     finally:
@@ -190,7 +191,7 @@ def handle_client(conn, addr):
 ##########################
 
 def main():
-    HOST = '127.0.0.1'
+    HOST = '0.0.0.0'
     PORT = 65433
 
     # Создаем сокет и разрешаем быстрое переиспользование порта

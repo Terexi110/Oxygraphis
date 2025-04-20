@@ -178,6 +178,19 @@ def handle_client(conn, addr):
         confirmation = gosthash.new('streebog256', data=shared_key).digest()
         conn.sendall(confirmation)
         print("Shared key:", shared_key.hex())
+
+        print("Начало обмена сообщениями...")
+        while True:
+            # Прием сообщения от клиента
+            msg_length = int.from_bytes(recv_exact(4), 'big')
+            message = recv_exact(msg_length).decode('utf-8')
+            print(f"[{addr}] Сообщение: {message}")
+
+            # Отправка ответа
+            response = f"Ответ на: {message}"
+            conn.sendall(len(response.encode()).to_bytes(4, 'big'))
+            conn.sendall(response.encode())
+
         with open('server_key.bin', 'wb') as f:
             f.write(shared_key)
     except Exception as e:

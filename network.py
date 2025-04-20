@@ -8,7 +8,7 @@ def is_port_open():
     """Проверяет, доступен ли порт сервера."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        sock.connect(('0.0.0.0', 65433))
+        sock.connect(('192.168.235.124', 65433))
         return True
     except ConnectionRefusedError:
         return False

@@ -197,7 +197,21 @@ def main():
         print("Keys match!" if server_hash == client_hash else "Keys mismatch!")
         with open('client_key.bin', 'wb') as f:
             f.write(shared_key)
-        return shared_key
+
+        print("Начало чата (введите 'exit' для выхода)")
+        while True:
+            # Отправка сообщения
+            message = input("Вы: ")
+            if message.lower() == 'exit':
+                break
+
+            s.sendall(len(message.encode()).to_bytes(4, 'big'))
+            s.sendall(message.encode())
+
+            # Получение ответа
+            resp_length = int.from_bytes(recv_exact(4), 'big')
+            response = recv_exact(resp_length).decode()
+            print(f"Сервер: {response}")
 
 
 if __name__ == "__main__":
